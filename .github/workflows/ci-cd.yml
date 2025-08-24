@@ -166,12 +166,11 @@ jobs:
 
       - name: Update ArgoCD application
         run: |
+          REPO_ROOT=$(git rev-parse --show-toplevel)
+          echo "REPO_ROOT=$REPO_ROOT" >> $GITHUB_OUTPUT
+          cd ${{ steps.repo_root.outputs.REPO_ROOT }}/fastapi-ml-deploy/charts/fastapi-ml
           echo "GitHub workspace: $GITHUB_WORKSPACE"
-          cd $GITHUB_WORKSPACE/../../
           echo "Current directory: $(pwd)"
-          # Navigate to the fastapi-ml-deploy directory
-          cd fastapi-ml-deploy/charts/fastapi-ml
-          echo "PWD: $(pwd)"
           ls -la
           echo "🔄 Triggering ArgoCD deployment..."
           if command -v yq &> /dev/null; then
