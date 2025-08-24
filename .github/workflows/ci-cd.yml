@@ -133,6 +133,16 @@ jobs:
         run: |
           echo "🧪 Testing Docker image..."
           # Start container in background
+          docker rm -f test-app || true
+          #Wait until container is fully removed
+          for i in {1..10}; do
+            if [ -z "$(docker ps -a -q -f name=test-app)" ]; then
+              echo "✅ Container test-app fully removed"
+              break
+            fi
+            echo "⏳ Waiting for test-app to be removed ($i/10)..."
+            sleep 1
+         done
           docker run -d --name test-app -p 8001:8000 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           
           # Wait for app to start
