@@ -120,7 +120,7 @@ jobs:
 
           MAX_RETRIES=20
           RETRY_COUNT=0
-          until curl -s http://localhost:8001/ > /dev/null; do
+          until curl -s http://localhost:8001/health > /dev/null; do
             RETRY_COUNT=$((RETRY_COUNT+1))
             if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
               echo "❌ Container failed to start in time"
@@ -132,7 +132,7 @@ jobs:
             sleep 2
           done
 
-          curl -f http://localhost:8001/
+          curl -f http://localhost:8001/health
           curl -f http://localhost:8001/ping
 
           docker stop test-app
