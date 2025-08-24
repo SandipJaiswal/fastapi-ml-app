@@ -14,27 +14,20 @@ env:
   ARGOCD_SERVER: "192.168.0.201"
 
 jobs:
-  # 🧪 Test Job
   test:
     runs-on: [self-hosted, k3s, homelab]
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         run: |
-          # Install Python if not available
           if ! command -v python3 &> /dev/null; then
             sudo apt-get update
             sudo apt-get install -y python3 python3-pip python3-venv
           fi
-          
-          # Create virtual environment
           python3 -m venv venv
           source venv/bin/activate
-          
-          # Upgrade pip
           python -m pip install --upgrade pip
 
       - name: Install dependencies
@@ -45,14 +38,13 @@ jobs:
       - name: Run tests
         run: |
           source venv/bin/activate
-          # Create a simple test file if it doesn't exist
           if [ ! -f "test_main.py" ]; then
             cat > test_main.py << 'EOF'
           from fastapi.testclient import TestClient
           from app.main import app
-          
+
           client = TestClient(app)
-          
+
           def test_root():
               response = client.get("/")
               assert response.status_code == 200
@@ -66,17 +58,13 @@ jobs:
               assert data["message"] == "pong"
           EOF
           fi
-          
-          # Run tests
           pytest test_main.py -v
 
-  # 🏗️ Build and Push Job
   build-and-push:
     needs: test
     runs-on: [self-hosted, k3s, homelab]
     outputs:
       image-tag: ${{ steps.vars.outputs.IMAGE_TAG }}
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -93,20 +81,16 @@ jobs:
           if [ ! -f "Dockerfile" ]; then
             cat > Dockerfile << 'EOF'
           FROM python:3.9-slim
-          
+
           WORKDIR /app
-          
-          # Install dependencies
+
           COPY requirements.txt .
           RUN pip install --no-cache-dir -r requirements.txt
-          
-          # Copy application code
+
           COPY . .
-          
-          # Expose port
+
           EXPOSE 8000
-          
-          # Run the application
+
           CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
           EOF
           fi
@@ -125,48 +109,42 @@ jobs:
           echo "🐳 Building Docker image..."
           docker build -t ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
           docker build -t ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest .
-          
           echo "📋 Built images:"
           docker images | grep ${{ env.IMAGE_NAME }}
-          
-- name: Test Docker image
-  run: |
-    echo "🧪 Testing Docker image..."
-    docker rm -f test-app || true
-    docker run -d --name test-app -p 8001:8000 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
-    # Wait until container responds
-    MAX_RETRIES=20
-    RETRY_COUNT=0
-    until curl -s http://localhost:8001/ > /dev/null; do
-      RETRY_COUNT=$((RETRY_COUNT+1))
-      if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-        echo "❌ Container failed to start in time"
-        docker logs test-app
-        docker stop test-app
-        docker rm test-app
-        exit 1
-      fi
-      sleep 2
-    done
+      - name: Test Docker image
+        run: |
+          echo "🧪 Testing Docker image..."
+          docker rm -f test-app || true
+          docker run -d --name test-app -p 8001:8000 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
-    # Test endpoints
-    curl -f http://localhost:8001/
-    curl -f http://localhost:8001/ping
+          MAX_RETRIES=20
+          RETRY_COUNT=0
+          until curl -s http://localhost:8001/ > /dev/null; do
+            RETRY_COUNT=$((RETRY_COUNT+1))
+            if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+              echo "❌ Container failed to start in time"
+              docker logs test-app
+              docker stop test-app
+              docker rm test-app
+              exit 1
+            fi
+            sleep 2
+          done
 
-    # Cleanup
-    docker stop test-app
-    docker rm test-app
+          curl -f http://localhost:8001/
+          curl -f http://localhost:8001/ping
 
-    echo "✅ Docker image tests passed!"
+          docker stop test-app
+          docker rm test-app
 
+          echo "✅ Docker image tests passed!"
 
       - name: Push Docker image to registry
         run: |
           echo "📤 Pushing images to registry..."
           docker push ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           docker push ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest
-          
           echo "✅ Images pushed successfully!"
 
       - name: Verify registry push
@@ -174,12 +152,10 @@ jobs:
           echo "🔍 Verifying image in registry..."
           curl -s http://${{ env.REGISTRY_URL }}/v2/${{ env.IMAGE_NAME }}/tags/list || echo "Registry check failed"
 
-  # 🚀 Deploy Job
   deploy:
     needs: [test, build-and-push]
     runs-on: [self-hosted, k3s, homelab]
     if: github.ref == 'refs/heads/main'
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -191,17 +167,10 @@ jobs:
       - name: Update ArgoCD application
         run: |
           echo "🔄 Triggering ArgoCD deployment..."
-          
-          # Method 1: Update Helm values and let ArgoCD sync
           if command -v yq &> /dev/null; then
-            # Update values.yaml with new image tag
             yq e '.image.tag = "${{ env.IMAGE_TAG }}"' -i values.yaml
-            
-            # If you have the deploy repo locally or can push to it
             echo "Updated image tag to: ${{ env.IMAGE_TAG }}"
           fi
-          
-          # Method 2: Direct ArgoCD API call (your current approach)
           ARGOCD_TOKEN="${{ secrets.ARGOCD_TOKEN }}"
           if [ -n "$ARGOCD_TOKEN" ]; then
             curl -X POST \
@@ -225,11 +194,7 @@ jobs:
       - name: Wait for deployment
         run: |
           echo "⏳ Waiting for deployment to be ready..."
-          
-          # Wait for ArgoCD to sync
           sleep 30
-          
-          # Check if deployment exists and wait for it
           if kubectl get deployment fastapi-ml -n fastapi-ml >/dev/null 2>&1; then
             kubectl rollout status deployment/fastapi-ml -n fastapi-ml --timeout=300s
             echo "✅ Deployment rolled out successfully!"
@@ -240,18 +205,12 @@ jobs:
       - name: Verify deployment
         run: |
           echo "🔍 Verifying deployment..."
-          
-          # Check pods
           kubectl get pods -n fastapi-ml -l app=fastapi-ml
-          
-          # Get service info
           kubectl get svc -n fastapi-ml
-          
-          # Test health endpoint if service is available
           SERVICE_IP=$(kubectl get svc fastapi-ml -n fastapi-ml -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
           if [ -n "$SERVICE_IP" ]; then
             echo "🌐 Testing service at: http://$SERVICE_IP"
-            sleep 10  # Wait for LoadBalancer
+            sleep 10
             curl -f "http://$SERVICE_IP/" || echo "Service not yet ready"
           fi
 
@@ -263,12 +222,10 @@ jobs:
           echo "  ArgoCD: http://${{ env.ARGOCD_SERVER }}"
           echo "  Registry: http://${{ env.REGISTRY_URL }}"
 
-  # 🔄 Notify Job (Optional)
   notify:
     needs: [test, build-and-push, deploy]
     runs-on: [self-hosted, k3s, homelab]
     if: always()
-    
     steps:
       - name: Deployment notification
         run: |
@@ -282,4 +239,3 @@ jobs:
             echo "Tests: ${{ needs.test.result }}"
             echo "Build: ${{ needs.build-and-push.result }}"
             echo "Deploy: ${{ needs.deploy.result }}"
-          fi
