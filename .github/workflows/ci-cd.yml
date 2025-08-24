@@ -118,7 +118,7 @@ jobs:
           docker rm -f test-app || true
           docker run -d --name test-app -p 8001:8000 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
-          MAX_RETRIES=20
+          MAX_RETRIES=30
           RETRY_COUNT=0
           until curl -s http://localhost:8001/health > /dev/null; do
             RETRY_COUNT=$((RETRY_COUNT+1))
@@ -131,7 +131,7 @@ jobs:
             fi
             sleep 2
           done
-
+          echo "✅ Container is ready"
           curl -f http://localhost:8001/health
           curl -f http://localhost:8001/ping
 
