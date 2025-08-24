@@ -168,7 +168,7 @@ jobs:
         run: |
           echo "🔄 Triggering ArgoCD deployment..."
           if command -v yq &> /dev/null; then
-            yq e '.image.tag = "${{ env.IMAGE_TAG }}"' -i values.yaml
+            yq e '.image.tag = "${{ env.IMAGE_TAG }}"' -i ../fastapi-ml-deploy/charts/fastapi-ml/values.yaml
             echo "Updated image tag to: ${{ env.IMAGE_TAG }}"
           fi
           ARGOCD_TOKEN="${{ secrets.ARGOCD_TOKEN }}"
