@@ -167,6 +167,8 @@ jobs:
       - name: Update ArgoCD application
         working-directory: ../fastapi-ml-deploy/charts/fastapi-ml
         run: |
+          echo "CWD: $(pwd)"
+          ls -la ../fastapi-ml-deploy/charts/fastapi-ml
           echo "🔄 Triggering ArgoCD deployment..."
           if command -v yq &> /dev/null; then
             yq e '.image.tag = "${{ env.IMAGE_TAG }}"' -i values.yaml
