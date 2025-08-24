@@ -129,25 +129,37 @@ jobs:
           echo "📋 Built images:"
           docker images | grep ${{ env.IMAGE_NAME }}
           
-      - name: Test Docker image
-        run: |
-          echo "🧪 Testing Docker image..."
-          # Start container in background
-          docker rm -f test-app || true
-          docker run -d --name test-app -p 8001:8000 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          
-          # Wait for app to start
-          sleep 10
-          
-          # Test endpoints
-          curl -f http://localhost:8001/ || (docker logs test-app && exit 1)
-          curl -f http://localhost:8001/ping || (docker logs test-app && exit 1)
-          
-          # Cleanup
-          docker stop test-app
-          docker rm test-app
-          
-          echo "✅ Docker image tests passed!"
+- name: Test Docker image
+  run: |
+    echo "🧪 Testing Docker image..."
+    docker rm -f test-app || true
+    docker run -d --name test-app -p 8001:8000 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+
+    # Wait until container responds
+    MAX_RETRIES=20
+    RETRY_COUNT=0
+    until curl -s http://localhost:8001/ > /dev/null; do
+      RETRY_COUNT=$((RETRY_COUNT+1))
+      if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+        echo "❌ Container failed to start in time"
+        docker logs test-app
+        docker stop test-app
+        docker rm test-app
+        exit 1
+      fi
+      sleep 2
+    done
+
+    # Test endpoints
+    curl -f http://localhost:8001/
+    curl -f http://localhost:8001/ping
+
+    # Cleanup
+    docker stop test-app
+    docker rm test-app
+
+    echo "✅ Docker image tests passed!"
+
 
       - name: Push Docker image to registry
         run: |
