@@ -165,7 +165,6 @@ jobs:
           echo "IMAGE_TAG=${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_ENV
 
       - name: Update ArgoCD application
-        working-directory: ../fastapi-ml-deploy/charts/fastapi-ml
         run: |
           echo "GitHub workspace: $GITHUB_WORKSPACE"
           echo "PWD: $(pwd)"
