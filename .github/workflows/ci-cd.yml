@@ -168,10 +168,11 @@ jobs:
         run: |
           echo "GitHub workspace: $GITHUB_WORKSPACE"
           cd $GITHUB_WORKSPACE/../../
+          echo "Current directory: $(pwd)"
+          # Navigate to the fastapi-ml-deploy directory
           cd fastapi-ml-deploy/charts/fastapi-ml
           echo "PWD: $(pwd)"
-          echo "Listing fastapi-ml-deploy chart folder:"
-          ls -la "$GITHUB_WORKSPACE/../fastapi-ml-deploy/charts/fastapi-ml" || echo "Folder not found"
+          ls -la
           echo "🔄 Triggering ArgoCD deployment..."
           if command -v yq &> /dev/null; then
             yq e '.image.tag = "${{ env.IMAGE_TAG }}"' -i values.yaml
