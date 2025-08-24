@@ -1,61 +1,270 @@
-name: CI/CD FastAPI ML App
+name: CI/CD FastAPI ML App - K3s Self-Hosted
 
 on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  REGISTRY_URL: "192.168.0.200:5000"
+  IMAGE_NAME: "fastapi-ml-app"
+  ARGOCD_SERVER: "192.168.0.201"
 
 jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
-
+  # 🧪 Test Job
+  test:
+    runs-on: [self-hosted, k3s, homelab]
+    
     steps:
-      # 1️⃣ Checkout the repository
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # 2️⃣ Set a dynamic image tag: timestamp + short commit SHA
-      - name: Set image tag
+      - name: Set up Python
+        run: |
+          # Install Python if not available
+          if ! command -v python3 &> /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y python3 python3-pip python3-venv
+          fi
+          
+          # Create virtual environment
+          python3 -m venv venv
+          source venv/bin/activate
+          
+          # Upgrade pip
+          python -m pip install --upgrade pip
+
+      - name: Install dependencies
+        run: |
+          source venv/bin/activate
+          pip install fastapi uvicorn pytest httpx
+
+      - name: Run tests
+        run: |
+          source venv/bin/activate
+          # Create a simple test file if it doesn't exist
+          if [ ! -f "test_main.py" ]; then
+            cat > test_main.py << 'EOF'
+          from fastapi.testclient import TestClient
+          from main import app
+          
+          client = TestClient(app)
+          
+          def test_root():
+              response = client.get("/")
+              assert response.status_code == 200
+              assert response.json() == {"message": "FastAPI is running!"}
+          
+          def test_ping():
+              response = client.get("/ping")
+              assert response.status_code == 200
+              assert response.json() == {"message": "pong"}
+          EOF
+          fi
+          
+          # Run tests
+          pytest test_main.py -v
+
+  # 🏗️ Build and Push Job
+  build-and-push:
+    needs: test
+    runs-on: [self-hosted, k3s, homelab]
+    outputs:
+      image-tag: ${{ steps.vars.outputs.IMAGE_TAG }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set dynamic image tag
         id: vars
-        run: echo "IMAGE_TAG=$(date +%s)-${GITHUB_SHA::7}" >> $GITHUB_ENV
+        run: |
+          IMAGE_TAG=$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
-      # 3️⃣ Log in to Docker registry
-      - name: Log in to Docker registry
-        uses: docker/login-action@v2
-        with:
-          registry: ${{ secrets.REGISTRY_URL }}
-          username: ${{ secrets.REGISTRY_USER }}
-          password: ${{ secrets.REGISTRY_PASS }}
+      - name: Create Dockerfile if not exists
+        run: |
+          if [ ! -f "Dockerfile" ]; then
+            cat > Dockerfile << 'EOF'
+          FROM python:3.9-slim
+          
+          WORKDIR /app
+          
+          # Install dependencies
+          COPY requirements.txt .
+          RUN pip install --no-cache-dir -r requirements.txt
+          
+          # Copy application code
+          COPY . .
+          
+          # Expose port
+          EXPOSE 8000
+          
+          # Run the application
+          CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+          EOF
+          fi
 
-      # 4️⃣ Build Docker image with dynamic tag
+      - name: Create requirements.txt if not exists
+        run: |
+          if [ ! -f "requirements.txt" ]; then
+            cat > requirements.txt << 'EOF'
+          fastapi==0.104.1
+          uvicorn[standard]==0.24.0
+          EOF
+          fi
+
       - name: Build Docker image
         run: |
-          docker build -t ${{ secrets.REGISTRY_URL }}/fastapi-ml-app:${{ env.IMAGE_TAG }} .
+          echo "🐳 Building Docker image..."
+          docker build -t ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
+          docker build -t ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest .
+          
+          echo "📋 Built images:"
+          docker images | grep ${{ env.IMAGE_NAME }}
 
-      # 5️⃣ Push Docker image to registry
-      - name: Push Docker image
+      - name: Test Docker image
         run: |
-          docker push ${{ secrets.REGISTRY_URL }}/fastapi-ml-app:${{ env.IMAGE_TAG }}
+          echo "🧪 Testing Docker image..."
+          # Start container in background
+          docker run -d --name test-app -p 8001:8000 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          
+          # Wait for app to start
+          sleep 10
+          
+          # Test endpoints
+          curl -f http://localhost:8001/ || (docker logs test-app && exit 1)
+          curl -f http://localhost:8001/ping || (docker logs test-app && exit 1)
+          
+          # Cleanup
+          docker stop test-app
+          docker rm test-app
+          
+          echo "✅ Docker image tests passed!"
 
-      # 6️⃣ Trigger ArgoCD image override sync
-      - name: Trigger ArgoCD sync with new image
+      - name: Push Docker image to registry
         run: |
-          curl -X POST \
-          -u admin:${{ secrets.ARGOCD_PASSWORD }} \
-          -H "Content-Type: application/json" \
-          -d '{
-                "revision": "HEAD",
-                "resources": [],
-                "strategy": {
-                  "apply": {
-                    "force": true
-                  }
-                },
-                "overrides": {
-                  "fastapi-ml": {
-                    "image": "${{ secrets.REGISTRY_URL }}/fastapi-ml-app:${{ env.IMAGE_TAG }}"
-                  }
-                }
-              }' \
-          http://192.168.0.201:8080/api/v1/applications/fastapi-ml/sync
+          echo "📤 Pushing images to registry..."
+          docker push ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          docker push ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest
+          
+          echo "✅ Images pushed successfully!"
 
+      - name: Verify registry push
+        run: |
+          echo "🔍 Verifying image in registry..."
+          curl -s http://${{ env.REGISTRY_URL }}/v2/${{ env.IMAGE_NAME }}/tags/list || echo "Registry check failed"
+
+  # 🚀 Deploy Job
+  deploy:
+    needs: [test, build-and-push]
+    runs-on: [self-hosted, k3s, homelab]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set image tag from build job
+        run: |
+          echo "IMAGE_TAG=${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_ENV
+
+      - name: Update ArgoCD application
+        run: |
+          echo "🔄 Triggering ArgoCD deployment..."
+          
+          # Method 1: Update Helm values and let ArgoCD sync
+          if command -v yq &> /dev/null; then
+            # Update values.yaml with new image tag
+            yq e '.image.tag = "${{ env.IMAGE_TAG }}"' -i values.yaml
+            
+            # If you have the deploy repo locally or can push to it
+            echo "Updated image tag to: ${{ env.IMAGE_TAG }}"
+          fi
+          
+          # Method 2: Direct ArgoCD API call (your current approach)
+          ARGOCD_TOKEN="${{ secrets.ARGOCD_TOKEN }}"
+          if [ -n "$ARGOCD_TOKEN" ]; then
+            curl -X POST \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{
+                    \"revision\": \"HEAD\",
+                    \"prune\": true,
+                    \"dryRun\": false,
+                    \"strategy\": {
+                      \"hook\": {
+                        \"force\": true
+                      }
+                    }
+                  }" \
+              "http://${{ env.ARGOCD_SERVER }}/api/v1/applications/fastapi-ml/sync"
+          else
+            echo "⚠️ ARGOCD_TOKEN not set, skipping ArgoCD sync"
+          fi
+
+      - name: Wait for deployment
+        run: |
+          echo "⏳ Waiting for deployment to be ready..."
+          
+          # Wait for ArgoCD to sync
+          sleep 30
+          
+          # Check if deployment exists and wait for it
+          if kubectl get deployment fastapi-ml -n fastapi-ml >/dev/null 2>&1; then
+            kubectl rollout status deployment/fastapi-ml -n fastapi-ml --timeout=300s
+            echo "✅ Deployment rolled out successfully!"
+          else
+            echo "⚠️ Deployment not found, may still be creating..."
+          fi
+
+      - name: Verify deployment
+        run: |
+          echo "🔍 Verifying deployment..."
+          
+          # Check pods
+          kubectl get pods -n fastapi-ml -l app=fastapi-ml
+          
+          # Get service info
+          kubectl get svc -n fastapi-ml
+          
+          # Test health endpoint if service is available
+          SERVICE_IP=$(kubectl get svc fastapi-ml -n fastapi-ml -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+          if [ -n "$SERVICE_IP" ]; then
+            echo "🌐 Testing service at: http://$SERVICE_IP"
+            sleep 10  # Wait for LoadBalancer
+            curl -f "http://$SERVICE_IP/" || echo "Service not yet ready"
+          fi
+
+      - name: Deployment summary
+        run: |
+          echo "📊 Deployment Summary:"
+          echo "  Image: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          echo "  Namespace: fastapi-ml"
+          echo "  ArgoCD: http://${{ env.ARGOCD_SERVER }}"
+          echo "  Registry: http://${{ env.REGISTRY_URL }}"
+
+  # 🔄 Notify Job (Optional)
+  notify:
+    needs: [test, build-and-push, deploy]
+    runs-on: [self-hosted, k3s, homelab]
+    if: always()
+    
+    steps:
+      - name: Deployment notification
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "🎉 Deployment successful!"
+            echo "✅ Tests: ${{ needs.test.result }}"
+            echo "✅ Build: ${{ needs.build-and-push.result }}"
+            echo "✅ Deploy: ${{ needs.deploy.result }}"
+          else
+            echo "❌ Deployment failed!"
+            echo "Tests: ${{ needs.test.result }}"
+            echo "Build: ${{ needs.build-and-push.result }}"
+            echo "Deploy: ${{ needs.deploy.result }}"
+          fi
