@@ -116,7 +116,7 @@ jobs:
         run: |
           echo "🧪 Testing Docker image..."
           docker rm -f test-app || true
-          docker run -d --name test-app -p 8001:8000 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          docker run -d --name test-app ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
           MAX_RETRIES=30
           RETRY_COUNT=0
