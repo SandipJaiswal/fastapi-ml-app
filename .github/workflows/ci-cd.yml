@@ -167,8 +167,10 @@ jobs:
       - name: Update ArgoCD application
         working-directory: ../fastapi-ml-deploy/charts/fastapi-ml
         run: |
-          echo "CWD: $(pwd)"
-          ls -la ../fastapi-ml-deploy/charts/fastapi-ml
+          echo "GitHub workspace: $GITHUB_WORKSPACE"
+          echo "PWD: $(pwd)"
+          echo "Listing fastapi-ml-deploy chart folder:"
+          ls -la "$GITHUB_WORKSPACE/../fastapi-ml-deploy/charts/fastapi-ml" || echo "Folder not found"
           echo "🔄 Triggering ArgoCD deployment..."
           if command -v yq &> /dev/null; then
             yq e '.image.tag = "${{ env.IMAGE_TAG }}"' -i values.yaml
