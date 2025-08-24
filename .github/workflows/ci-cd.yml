@@ -56,13 +56,13 @@ jobs:
           def test_root():
               response = client.get("/")
               assert response.status_code == 200
-	      data = response.json()
+              data = response.json()
               assert data["message"] == "FastAPI is running!" 
 
           def test_ping():
               response = client.get("/ping")
               assert response.status_code == 200
-	      data = response.json()
+              data = response.json()
               assert data["message"] == "pong"
           EOF
           fi
