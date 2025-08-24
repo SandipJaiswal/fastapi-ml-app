@@ -132,8 +132,8 @@ jobs:
             sleep 2
           done
           echo "✅ Container is ready"
-          curl -f http://localhost:8001/health
-          curl -f http://localhost:8001/ping
+          docker exec test-app curl -f http://localhost:8001/health
+          docker exec test-app curl -f http://localhost:8001/ping
 
           docker stop test-app
           docker rm test-app
