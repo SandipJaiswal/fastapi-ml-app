@@ -158,6 +158,8 @@ jobs:
 
       - name: Test Docker image (Debug)
         run: |
+          # Ensure old container is removed if it exists
+          docker rm -f test-fastapi || true
           echo "🧪 Testing Docker image with debugging..."
           
           # Run container in background
