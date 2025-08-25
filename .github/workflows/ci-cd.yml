@@ -287,7 +287,7 @@ jobs:
             - Source commit: ${{ github.sha }}
             - Build time: $(date -u)"
             
-            git push
+            git push https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/SandipJaiswal/fastapi-ml-deploy.git HEAD:main
             
             echo "✅ Deployment repository updated"
           fi
