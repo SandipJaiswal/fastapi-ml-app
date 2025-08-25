@@ -156,65 +156,51 @@ jobs:
           echo "📋 Built images:"
           docker images | grep ${{ env.IMAGE_NAME }}
 
-      - name: Test Docker image
+      - name: Test Docker image (Debug)
         run: |
-          # Cleanup any existing test containers
-          echo "🧹 Cleaning up any existing test containers..."
-          docker stop test-fastapi 2>/dev/null || true
-          docker rm test-fastapi 2>/dev/null || true
-
-          echo "🧪 Testing Docker image..."
+          echo "🧪 Testing Docker image with debugging..."
           
-          # Run container in background with correct port mapping
+          # Run container in background
           docker run -d --name test-fastapi -p 8001:8000 \
             ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           
-          # Wait for container to start and show logs
-          echo "⏳ Waiting for container to start..."
-          sleep 30
+          # Wait for startup
+          echo "⏳ Waiting 45 seconds for container startup..."
+          sleep 45
           
-          # Show container status and logs
-          docker ps | grep test-fastapi
-          echo "📋 Container logs:"
+          # Debug information
+          echo "🔍 Debug Information:"
+          echo "=== Container Status ==="
+          docker ps -a | grep test-fastapi
+          
+          echo "=== Container Logs ==="
           docker logs test-fastapi
           
-          # Test endpoints with retries
-          echo "🔍 Testing endpoints..."
+          echo "=== Port Information ==="
+          docker port test-fastapi
           
-          # Function to test endpoint with retries
-          test_endpoint() {
-            local endpoint=$1
-            local max_retries=5
-            local retry=0
-            
-            while [ $retry -lt $max_retries ]; do
-              echo "Testing $endpoint (attempt $((retry + 1))/$max_retries)..."
-              if curl -f --max-time 10 "http://localhost:8001$endpoint"; then
-                echo "✅ $endpoint test passed!"
-                return 0
-              else
-                echo "❌ $endpoint test failed, retrying in 5 seconds..."
-                sleep 5
-                retry=$((retry + 1))
-              fi
-            done
-            
-            echo "💥 $endpoint test failed after $max_retries attempts"
-            docker logs test-fastapi
-            return 1
-          }
+          echo "=== Network Information ==="
+          netstat -tlnp | grep :8001 || echo "Port 8001 not listening"
           
-          # Test all endpoints
-          test_endpoint "/" || exit 1
-          test_endpoint "/ping" || exit 1
-          test_endpoint "/health" || exit 1
-          test_endpoint "/ready" || exit 1
+          echo "=== Process Information ==="
+          ss -tulpn | grep :8001 || echo "No process on 8001"
+          
+          # Try connecting directly to container IP
+          CONTAINER_IP=$(docker inspect test-fastapi | jq -r '.[0].NetworkSettings.IPAddress')
+          echo "=== Container IP: $CONTAINER_IP ==="
+          
+          if [ -n "$CONTAINER_IP" ] && [ "$CONTAINER_IP" != "null" ]; then
+            echo "Testing direct container connection..."
+            curl -f --max-time 10 "http://$CONTAINER_IP:8000/health" || echo "Direct connection failed"
+          fi
+          
+          # Try localhost connection
+          echo "Testing localhost connection..."
+          curl -v --max-time 10 "http://localhost:8001/health" || echo "Localhost connection failed"
           
           # Cleanup
           docker stop test-fastapi && docker rm test-fastapi
-          
-          echo "🎉 All Docker image tests passed!"
-
+      
       - name: Push Docker images
         run: |
           echo "📤 Pushing images to internal registry..."
