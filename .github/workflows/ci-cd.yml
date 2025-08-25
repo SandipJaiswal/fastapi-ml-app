@@ -227,7 +227,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.DEPLOY_REPO }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_TOKEN }}
           path: deploy-repo
 
       - name: Install yq for YAML processing
