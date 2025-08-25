@@ -10,7 +10,7 @@ env:
   REGISTRY_URL: "192.168.0.200:5000"
   IMAGE_NAME: "fastapi-ml-app"
   DEPLOY_REPO: "SandipJaiswal/fastapi-ml-deploy"
-  ARGOCD_SERVER: "192.168.0.201"
+  ARGOCD_SERVER: "192.168.0.201:80"
 
 jobs:
   # 🧪 CI Pipeline: Test and Build
@@ -396,7 +396,7 @@ jobs:
           
           # Login to ArgoCD
           argocd login ${{ env.ARGOCD_SERVER }} --username admin \
-            --password "${{ secrets.ARGOCD_PASSWORD }}" --insecure
+            --password "${{ secrets.ARGOCD_PASSWORD }}" --plaintext
           
           # Check current app status
           echo "📊 Current ArgoCD application status:"
