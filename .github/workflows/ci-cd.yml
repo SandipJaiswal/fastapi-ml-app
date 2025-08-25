@@ -158,9 +158,13 @@ jobs:
 
       - name: Test Docker image
         run: |
+          # Cleanup any existing test containers
+          echo "🧹 Cleaning up any existing test containers..."
+          docker stop test-fastapi 2>/dev/null || true
+          docker rm test-fastapi 2>/dev/null || true
+
           echo "🧪 Testing Docker image..."
           
-          docker rm -f test-app || true
           # Run container in background with correct port mapping
           docker run -d --name test-fastapi -p 8001:8000 \
             ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
