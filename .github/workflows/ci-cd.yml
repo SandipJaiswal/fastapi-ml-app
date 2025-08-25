@@ -312,7 +312,7 @@ jobs:
       - name: Verify ArgoCD CLI & login
         run: |
           argocd version --client
-          argocd login ${{ env.ARGOCD_SERVER }} --username admin --password ${{ secrets.ARGOCD_PASSWORD }} --insecure
+          #argocd login ${{ env.ARGOCD_SERVER }} --username admin --password ${{ secrets.ARGOCD_PASSWORD }} --insecure
 
 
       - name: Ensure kubectl is installed
