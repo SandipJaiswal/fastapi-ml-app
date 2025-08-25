@@ -156,49 +156,48 @@ jobs:
           echo "📋 Built images:"
           docker images | grep ${{ env.IMAGE_NAME }}
 
-      - name: Test Docker image (Debug)
+      - name: Test Docker image
         run: |
           # Ensure old container is removed if it exists
           docker rm -f test-fastapi || true
-          echo "🧪 Testing Docker image with debugging..."
+          echo "🧪 Testing Docker image..."
           
           # Run container in background
           docker run -d --name test-fastapi -p 8001:8000 \
             ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           
-          # Wait for startup
-          echo "⏳ Waiting 45 seconds for container startup..."
-          sleep 45
+          # Wait for startup with proper health checking
+          echo "⏳ Waiting for container startup..."
+          for i in {1..30}; do
+            if docker logs test-fastapi 2>&1 | grep -q "Uvicorn running on"; then
+              echo "✅ Container started successfully"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "❌ Container failed to start within timeout"
+              echo "=== Container Logs ==="
+              docker logs test-fastapi
+              docker stop test-fastapi && docker rm test-fastapi
+              exit 1
+            fi
+            sleep 2
+          done
           
-          # Debug information
-          echo "🔍 Debug Information:"
-          echo "=== Container Status ==="
-          docker ps -a | grep test-fastapi
-          
-          echo "=== Container Logs ==="
-          docker logs test-fastapi
-          
-          echo "=== Port Information ==="
-          docker port test-fastapi
-          
-          echo "=== Network Information ==="
-          netstat -tlnp | grep :8001 || echo "Port 8001 not listening"
-          
-          echo "=== Process Information ==="
-          ss -tulpn | grep :8001 || echo "No process on 8001"
-          
-          # Try connecting directly to container IP
-          CONTAINER_IP=$(docker inspect test-fastapi | jq -r '.[0].NetworkSettings.IPAddress')
-          echo "=== Container IP: $CONTAINER_IP ==="
-          
-          if [ -n "$CONTAINER_IP" ] && [ "$CONTAINER_IP" != "null" ]; then
-            echo "Testing direct container connection..."
-            curl -f --max-time 10 "http://$CONTAINER_IP:8000/health" || echo "Direct connection failed"
-          fi
-          
-          # Try localhost connection
-          echo "Testing localhost connection..."
-          curl -v --max-time 10 "http://localhost:8001/health" || echo "Localhost connection failed"
+          # Test health endpoint
+          for i in {1..10}; do
+            if curl -f --max-time 10 "http://localhost:8001/health"; then
+              echo "✅ Health check passed"
+              break
+            fi
+            if [ $i -eq 10 ]; then
+              echo "❌ Health check failed"
+              docker logs test-fastapi
+              docker stop test-fastapi && docker rm test-fastapi
+              exit 1
+            fi
+            echo "Retrying health check... ($i/10)"
+            sleep 3
+          done
           
           # Cleanup
           docker stop test-fastapi && docker rm test-fastapi
@@ -230,15 +229,33 @@ jobs:
           token: ${{ secrets.GH_TOKEN }}
           path: deploy-repo
 
-      - name: Install yq for YAML processing
+      - name: Install required tools
         run: |
+          # Install yq for YAML processing
           if ! command -v yq &> /dev/null; then
             sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/local/bin/yq
             sudo chmod +x /usr/local/bin/yq
           fi
+          
+          # Install kubectl if missing
+          if ! command -v kubectl &> /dev/null; then
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/
+          fi
+          
+          # Install ArgoCD CLI if missing
+          if ! command -v argocd &> /dev/null; then
+            ARGOCD_VERSION=$(curl -s https://api.github.com/repos/argoproj/argo-cd/releases/latest | grep tag_name | cut -d '"' -f 4)
+            curl -sSL -o argocd "https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-amd64"
+            chmod +x argocd
+            sudo mv argocd /usr/local/bin/
+          fi
+          
+          echo "✅ Tools installed:"
           yq --version
-          echo "Testing yq:"
-          echo 'test: "hello"' | yq e '.test' -
+          kubectl version --client
+          argocd version --client
 
       - name: Update Helm values with new image
         run: |
@@ -246,30 +263,36 @@ jobs:
           
           # Verify image exists in registry before updating
           echo "🔍 Verifying image exists in registry..."
-          for i in {1..5}; do
+          for i in {1..10}; do
             if curl -f -s "http://${{ env.REGISTRY_URL }}/v2/${{ env.IMAGE_NAME }}/manifests/${{ needs.ci-pipeline.outputs.image-tag }}" >/dev/null; then
               echo "✅ Image verified in registry"
               break
             else
-              echo "Image not yet available in registry, waiting... ($i/5)"
+              echo "Image not yet available in registry, waiting... ($i/10)"
               sleep 10
-              if [ $i -eq 5 ]; then
-                echo "❌ Image not found in registry after 50 seconds"
+              if [ $i -eq 10 ]; then
+                echo "❌ Image not found in registry after 100 seconds"
                 exit 1
               fi
             fi
           done
           
-          echo "📝 Current values.yaml:"
+          echo "📄 Current values.yaml:"
           cat charts/fastapi-ml/values.yaml
           
-          echo "🔄 Updating image tag to: ${{ needs.ci-pipeline.outputs.image-tag }}"
+          echo "📝 Updating image tag to: ${{ needs.ci-pipeline.outputs.image-tag }}"
           yq e '.image.tag = "${{ needs.ci-pipeline.outputs.image-tag }}"' -i charts/fastapi-ml/values.yaml
           
-          echo "📝 Updated values.yaml:"
+          echo "📄 Updated values.yaml:"
           cat charts/fastapi-ml/values.yaml
+          
           UPDATED_TAG=$(yq e '.image.tag' charts/fastapi-ml/values.yaml)
           echo "📋 Verification - image.tag is now: $UPDATED_TAG"
+          
+          if [ "$UPDATED_TAG" != "${{ needs.ci-pipeline.outputs.image-tag }}" ]; then
+            echo "❌ Image tag update failed!"
+            exit 1
+          fi
 
       - name: Commit and push deployment changes
         run: |
@@ -294,142 +317,128 @@ jobs:
             git push https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/SandipJaiswal/fastapi-ml-deploy.git HEAD:main
             
             echo "✅ Deployment repository updated"
+            
+            # Wait for Git changes to propagate
+            echo "⏳ Waiting for Git changes to propagate..."
+            sleep 20
           fi
 
-
-      - name: Install ArgoCD CLI if missing
-        run: |
-         if command -v argocd >/dev/null 2>&1; then
-           echo "✅ ArgoCD CLI already installed at $(command -v argocd)"
-           argocd version --client
-         else
-           echo "📥 Installing ArgoCD CLI..."
-           ARGOCD_VERSION=$(curl -s https://api.github.com/repos/argoproj/argo-cd/releases/latest | grep tag_name | cut -d '"' -f 4)
-           curl -sSL -o argocd "https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-amd64"
-           chmod +x argocd
-           mkdir -p $HOME/bin
-           mv argocd $HOME/bin/
-           echo "$HOME/bin" >> $GITHUB_PATH
-           echo "✅ ArgoCD CLI installed at $HOME/bin/argocd"
-         fi 
-
-      - name: Verify ArgoCD CLI & login
-        run: |
-          argocd version --client
-          #argocd login ${{ env.ARGOCD_SERVER }} --username admin --password ${{ secrets.ARGOCD_PASSWORD }} --insecure
-
-
-      - name: Ensure kubectl is installed
-        run: |
-          if command -v kubectl >/dev/null 2>&1; then
-            echo "✅ kubectl already installed at $(command -v kubectl)"
-            kubectl version --client
-          else
-            echo "📥 Installing kubectl..."
-            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-            chmod +x kubectl
-            mkdir -p $HOME/bin
-            mv kubectl $HOME/bin/
-            echo "$HOME/bin" >> $GITHUB_PATH
-            #sudo mv kubectl /usr/local/bin/
-            echo "✅ kubectl installed at $(command -v kubectl)"
-            kubectl version --client
-          fi
-
-      - name: Trigger ArgoCD sync
+      - name: Trigger ArgoCD sync and wait
         run: |
           echo "🔄 Triggering ArgoCD sync..."
           
-          # Wait for Git changes to propagate
-          sleep 15
+          # Login to ArgoCD
+          argocd login ${{ env.ARGOCD_SERVER }} --username admin \
+            --password "${{ secrets.ARGOCD_PASSWORD }}" --insecure
           
-          # Method 1: Try ArgoCD CLI first
-          if command -v argocd &> /dev/null; then
-            echo "Using ArgoCD CLI..."
-            argocd login ${{ env.ARGOCD_SERVER }} --username admin \
-              --password "${{ secrets.ARGOCD_PASSWORD }}" --insecure || true
-            argocd app sync fastapi-ml --force || echo "CLI sync failed"
-            argocd app wait fastapi-ml --timeout 300 || echo "CLI wait failed"
-          else
-            echo "ArgoCD CLI not available, using kubectl..."
-            
-            # Method 2: Use kubectl to patch ArgoCD application
-            kubectl patch application fastapi-ml -n argocd --type merge \
-              -p '{"operation":{"initiatedBy":{"username":"github-actions"},"sync":{"revision":"HEAD"}}}' || \
-              echo "⚠️ kubectl patch failed, ArgoCD will auto-sync eventually"
-          fi
+          # Check current app status
+          echo "📊 Current ArgoCD application status:"
+          argocd app get fastapi-ml || echo "Application not found or not accessible"
           
-          echo "✅ ArgoCD sync triggered"
+          # Force sync the application
+          echo "🔄 Forcing sync..."
+          argocd app sync fastapi-ml --force --timeout 300
+          
+          # Wait for sync to complete
+          echo "⏳ Waiting for sync completion..."
+          argocd app wait fastapi-ml --timeout 600 --health
+          
+          echo "✅ ArgoCD sync completed"
 
       - name: Wait and verify deployment
         run: |
-          echo "⏳ Waiting for ArgoCD to process changes..."
+          echo "⏳ Waiting for Kubernetes deployment..."
           
-          # Wait for ArgoCD application to exist and be synced
+          # Wait for namespace to exist
           for i in {1..20}; do
-            if kubectl get application fastapi-ml -n argocd >/dev/null 2>&1; then
-              APP_STATUS=$(kubectl get application fastapi-ml -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
-              echo "ArgoCD sync status: $APP_STATUS"
-              
-              if [ "$APP_STATUS" = "Synced" ] || [ "$APP_STATUS" = "OutOfSync" ]; then
-                echo "✅ ArgoCD application is processing"
-                break
-              fi
-            fi
-            
-            echo "Waiting for ArgoCD... ($i/20)"
-            sleep 15
-          done
-          
-          # Wait for namespace creation
-          echo "🏗️ Waiting for namespace creation..."
-          for i in {1..10}; do
             if kubectl get namespace fastapi-ml >/dev/null 2>&1; then
               echo "✅ Namespace fastapi-ml exists"
               break
             fi
-            echo "Waiting for namespace... ($i/10)"
+            echo "Waiting for namespace... ($i/20)"
             sleep 10
           done
           
-          # Wait for deployment with better error handling
-          if kubectl get deployment fastapi-ml -n fastapi-ml >/dev/null 2>&1; then
-            echo "📊 Deployment found, waiting for rollout..."
-            kubectl rollout status deployment/fastapi-ml -n fastapi-ml --timeout=600s || {
-              echo "❌ Deployment rollout failed, showing debug info:"
-              kubectl get pods -n fastapi-ml
-              kubectl describe deployment fastapi-ml -n fastapi-ml
-              kubectl get events -n fastapi-ml --sort-by='.lastTimestamp' | tail -10
-              exit 1
-            }
-            
-            # Wait for LoadBalancer IP with retries
-            echo "🌐 Waiting for LoadBalancer IP..."
-            for i in {1..12}; do
-              SERVICE_IP=$(kubectl get svc fastapi-ml -n fastapi-ml -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
-              if [ -n "$SERVICE_IP" ] && [ "$SERVICE_IP" != "null" ]; then
-                echo "✅ Service available at: http://$SERVICE_IP"
-                
-                # Test service with retries
-                for j in {1..6}; do
-                  if curl -f --max-time 10 "http://$SERVICE_IP/health"; then
-                    echo "🎉 Service health check passed!"
-                    break
-                  else
-                    echo "Health check attempt $j/6 failed, waiting..."
-                    sleep 10
-                  fi
-                done
-                break
-              fi
-              echo "Waiting for LoadBalancer IP... ($i/12)"
-              sleep 10
-            done
+          # Wait for deployment to exist and be ready
+          echo "📦 Waiting for deployment..."
+          kubectl wait --for=condition=available --timeout=600s deployment/fastapi-ml -n fastapi-ml
+          
+          # Check pod status
+          echo "🔍 Pod status:"
+          kubectl get pods -n fastapi-ml -o wide
+          
+          # Verify the new image is deployed
+          DEPLOYED_IMAGE=$(kubectl get deployment fastapi-ml -n fastapi-ml -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "🖼️ Deployed image: $DEPLOYED_IMAGE"
+          
+          if [[ "$DEPLOYED_IMAGE" == *"${{ needs.ci-pipeline.outputs.image-tag }}"* ]]; then
+            echo "✅ Correct image version deployed"
           else
-            echo "❌ Deployment not found after waiting. Checking ArgoCD status:"
-            kubectl get application fastapi-ml -n argocd -o yaml || echo "ArgoCD application not found"
-            kubectl get events -n argocd --sort-by='.lastTimestamp' | grep fastapi || echo "No ArgoCD events found"
+            echo "❌ Wrong image version deployed"
+            echo "Expected: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ needs.ci-pipeline.outputs.image-tag }}"
+            echo "Actual: $DEPLOYED_IMAGE"
             exit 1
+          fi
+
+      - name: Test service connectivity
+        run: |
+          echo "🌐 Testing service connectivity..."
+          
+          # Get service information
+          kubectl get svc fastapi-ml -n fastapi-ml -o wide
+          
+          # Wait for LoadBalancer IP
+          echo "⏳ Waiting for LoadBalancer IP..."
+          for i in {1..30}; do
+            SERVICE_IP=$(kubectl get svc fastapi-ml -n fastapi-ml -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+            if [ -n "$SERVICE_IP" ] && [ "$SERVICE_IP" != "null" ] && [ "$SERVICE_IP" != "<pending>" ]; then
+              echo "✅ Service available at: $SERVICE_IP"
+              
+              # Test the service on port 80 (external port)
+              echo "🧪 Testing service health check on port 80..."
+              for j in {1..10}; do
+                if curl -f --max-time 15 "http://$SERVICE_IP:80/health"; then
+                  echo "🎉 Service health check passed on port 80!"
+                  break
+                elif [ $j -eq 10 ]; then
+                  echo "❌ Health check failed on port 80"
+                  # Try direct pod access for debugging
+                  echo "🔍 Debugging - trying direct pod access..."
+                  POD_NAME=$(kubectl get pods -n fastapi-ml -l app=fastapi-ml -o jsonpath='{.items[0].metadata.name}')
+                  if [ -n "$POD_NAME" ]; then
+                    echo "Testing direct pod access on port 8000..."
+                    kubectl port-forward pod/$POD_NAME 8080:8000 -n fastapi-ml &
+                    PF_PID=$!
+                    sleep 5
+                    curl -f --max-time 10 "http://localhost:8080/health" || echo "Direct pod access failed"
+                    kill $PF_PID || true
+                  fi
+                  exit 1
+                else
+                  echo "Health check attempt $j/10 failed, waiting..."
+                  sleep 10
+                fi
+              done
+              break
+            fi
+            echo "Waiting for LoadBalancer IP... ($i/30)"
+            sleep 10
+          done
+          
+          if [ -z "$SERVICE_IP" ] || [ "$SERVICE_IP" = "null" ] || [ "$SERVICE_IP" = "<pending>" ]; then
+            echo "⚠️ LoadBalancer IP not assigned. Checking service type..."
+            kubectl describe svc fastapi-ml -n fastapi-ml
+            
+            # Try NodePort or ClusterIP access as fallback
+            SERVICE_TYPE=$(kubectl get svc fastapi-ml -n fastapi-ml -o jsonpath='{.spec.type}')
+            echo "Service type: $SERVICE_TYPE"
+            
+            if [ "$SERVICE_TYPE" = "NodePort" ]; then
+              NODE_PORT=$(kubectl get svc fastapi-ml -n fastapi-ml -o jsonpath='{.spec.ports[0].nodePort}')
+              NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+              echo "Trying NodePort access: $NODE_IP:$NODE_PORT"
+              curl -f --max-time 10 "http://$NODE_IP:$NODE_PORT/health" || echo "NodePort access failed"
+            fi
           fi
 
   # 📊 Summary Job
@@ -454,7 +463,12 @@ jobs:
             echo "🎉 Deployment completed successfully!"
             echo "✅ Your FastAPI app should be running in the cluster"
             echo "🔍 Check: kubectl get pods -n fastapi-ml"
+            echo "🌐 Service: kubectl get svc fastapi-ml -n fastapi-ml"
           else
             echo "❌ Deployment encountered issues"
             echo "🔧 Check ArgoCD dashboard: http://${{ env.ARGOCD_SERVER }}"
+            echo "🔍 Debug commands:"
+            echo "  kubectl get pods -n fastapi-ml"
+            echo "  kubectl describe deployment fastapi-ml -n fastapi-ml"
+            echo "  kubectl logs -l app=fastapi-ml -n fastapi-ml"
           fi
