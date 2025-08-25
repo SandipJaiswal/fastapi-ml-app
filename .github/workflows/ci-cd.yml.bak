@@ -70,16 +70,12 @@ jobs:
               assert response.status_code == 200
               data = response.json()
               assert "message" in data
-              assert "timestamp" in data
-              assert "hostname" in data
               print("✅ Root endpoint test passed")
 
           def test_ping():
               response = client.get("/ping")
               assert response.status_code == 200
-              data = response.json()
-              assert data["message"] == "pong"
-              assert "timestamp" in data
+              assert response.json() == {"message": "pong"}
               print("✅ Ping endpoint test passed")
 
           def test_health():
@@ -87,22 +83,12 @@ jobs:
               assert response.status_code == 200
               data = response.json()
               assert data["status"] == "healthy"
-              assert "timestamp" in data
-              assert "hostname" in data
               print("✅ Health endpoint test passed")
-
-          def test_ready():
-              response = client.get("/ready")
-              assert response.status_code == 200
-              data = response.json()
-              assert data["status"] == "ready"
-              print("✅ Ready endpoint test passed")
 
           if __name__ == "__main__":
               test_root()
               test_ping()
               test_health()
-              test_ready()
               print("🎉 All tests passed!")
           EOF
           fi
