@@ -160,6 +160,7 @@ jobs:
         run: |
           echo "🧪 Testing Docker image..."
           
+          docker rm -f test-app || true
           # Run container in background with correct port mapping
           docker run -d --name test-fastapi -p 8001:8000 \
             ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
