@@ -291,6 +291,23 @@ jobs:
             
             echo "✅ Deployment repository updated"
           fi
+
+      - name: Ensure kubectl is installed
+        run: |
+          if command -v kubectl >/dev/null 2>&1; then
+            echo "✅ kubectl already installed at $(command -v kubectl)"
+            kubectl version --client
+          else
+            echo "📥 Installing kubectl..."
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            mkdir -p $HOME/bin
+            mv kubectl $HOME/bin/
+            echo "$HOME/bin" >> $GITHUB_PATH
+            echo "✅ kubectl installed at $HOME/bin/kubectl"
+            kubectl version --client
+          fi
+
       - name: Trigger ArgoCD sync
         run: |
           echo "🔄 Triggering ArgoCD sync..."
