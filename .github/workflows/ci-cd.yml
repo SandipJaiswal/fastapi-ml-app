@@ -237,6 +237,8 @@ jobs:
             sudo chmod +x /usr/local/bin/yq
           fi
           yq --version
+          echo "Testing yq:"
+          echo 'test: "hello"' | yq e '.test' -
 
       - name: Update Helm values with new image
         run: |
@@ -266,6 +268,8 @@ jobs:
           
           echo "📝 Updated values.yaml:"
           cat charts/fastapi-ml/values.yaml
+          UPDATED_TAG=$(yq e '.image.tag' charts/fastapi-ml/values.yaml)
+          echo "📋 Verification - image.tag is now: $UPDATED_TAG"
 
       - name: Commit and push deployment changes
         run: |
