@@ -306,10 +306,14 @@ jobs:
            mkdir -p $HOME/bin
            mv argocd $HOME/bin/
            echo "$HOME/bin" >> $GITHUB_PATH
-           argocd login ${{ env.ARGOCD_SERVER }} --username admin --password ${{ secrets.ARGOCD_PASSWORD }} --insecure
            echo "✅ ArgoCD CLI installed at $HOME/bin/argocd"
-           argocd version --client
          fi 
+
+      - name: Verify ArgoCD CLI & login
+        run: |
+          argocd version --client
+          argocd login ${{ env.ARGOCD_SERVER }} --username admin --password ${{ secrets.ARGOCD_PASSWORD }} --insecure
+
 
       - name: Ensure kubectl is installed
         run: |
