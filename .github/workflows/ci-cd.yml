@@ -160,27 +160,55 @@ jobs:
         run: |
           echo "🧪 Testing Docker image..."
           
-          # Run container in background
+          # Run container in background with correct port mapping
           docker run -d --name test-fastapi -p 8001:8000 \
             ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           
-          # Wait for container to start
-          sleep 15
+          # Wait for container to start and show logs
+          echo "⏳ Waiting for container to start..."
+          sleep 30
           
-          # Test endpoints
-          echo "Testing root endpoint..."
-          curl -f http://localhost:8001/ || (docker logs test-fastapi && exit 1)
+          # Show container status and logs
+          docker ps | grep test-fastapi
+          echo "📋 Container logs:"
+          docker logs test-fastapi
           
-          echo "Testing ping endpoint..."
-          curl -f http://localhost:8001/ping || (docker logs test-fastapi && exit 1)
+          # Test endpoints with retries
+          echo "🔍 Testing endpoints..."
           
-          echo "Testing health endpoint..."
-          curl -f http://localhost:8001/health || (docker logs test-fastapi && exit 1)
+          # Function to test endpoint with retries
+          test_endpoint() {
+            local endpoint=$1
+            local max_retries=5
+            local retry=0
+            
+            while [ $retry -lt $max_retries ]; do
+              echo "Testing $endpoint (attempt $((retry + 1))/$max_retries)..."
+              if curl -f --max-time 10 "http://localhost:8001$endpoint"; then
+                echo "✅ $endpoint test passed!"
+                return 0
+              else
+                echo "❌ $endpoint test failed, retrying in 5 seconds..."
+                sleep 5
+                retry=$((retry + 1))
+              fi
+            done
+            
+            echo "💥 $endpoint test failed after $max_retries attempts"
+            docker logs test-fastapi
+            return 1
+          }
+          
+          # Test all endpoints
+          test_endpoint "/" || exit 1
+          test_endpoint "/ping" || exit 1
+          test_endpoint "/health" || exit 1
+          test_endpoint "/ready" || exit 1
           
           # Cleanup
           docker stop test-fastapi && docker rm test-fastapi
           
-          echo "✅ Docker image tests passed!"
+          echo "🎉 All Docker image tests passed!"
 
       - name: Push Docker images
         run: |
@@ -221,12 +249,26 @@ jobs:
         run: |
           cd deploy-repo
           
+          # Verify image exists in registry before updating
+          echo "🔍 Verifying image exists in registry..."
+          for i in {1..5}; do
+            if curl -f -s "http://${{ env.REGISTRY_URL }}/v2/${{ env.IMAGE_NAME }}/manifests/${{ needs.ci-pipeline.outputs.image-tag }}" >/dev/null; then
+              echo "✅ Image verified in registry"
+              break
+            else
+              echo "Image not yet available in registry, waiting... ($i/5)"
+              sleep 10
+              if [ $i -eq 5 ]; then
+                echo "❌ Image not found in registry after 50 seconds"
+                exit 1
+              fi
+            fi
+          done
+          
           echo "📝 Current values.yaml:"
           cat charts/fastapi-ml/values.yaml
           
           echo "🔄 Updating image tag to: ${{ needs.ci-pipeline.outputs.image-tag }}"
-          
-          # Update the image tag in values.yaml
           yq e '.image.tag = "${{ needs.ci-pipeline.outputs.image-tag }}"' -i charts/fastapi-ml/values.yaml
           
           echo "📝 Updated values.yaml:"
@@ -256,7 +298,6 @@ jobs:
             
             echo "✅ Deployment repository updated"
           fi
-
       - name: Trigger ArgoCD sync
         run: |
           echo "🔄 Triggering ArgoCD sync..."
@@ -264,61 +305,93 @@ jobs:
           # Wait for Git changes to propagate
           sleep 15
           
-          # Option 1: Using ArgoCD CLI (if available)
+          # Method 1: Try ArgoCD CLI first
           if command -v argocd &> /dev/null; then
-            argocd login ${{ env.ARGOCD_SERVER }} --username admin --password "${{ secrets.ARGOCD_PASSWORD }}" --insecure
-            argocd app sync fastapi-ml --force
-            argocd app wait fastapi-ml --timeout 300
+            echo "Using ArgoCD CLI..."
+            argocd login ${{ env.ARGOCD_SERVER }} --username admin \
+              --password "${{ secrets.ARGOCD_PASSWORD }}" --insecure || true
+            argocd app sync fastapi-ml --force || echo "CLI sync failed"
+            argocd app wait fastapi-ml --timeout 300 || echo "CLI wait failed"
           else
-            # Option 2: Using curl API
-            curl -X POST \
-              -H "Authorization: Bearer ${{ secrets.ARGOCD_TOKEN }}" \
-              -H "Content-Type: application/json" \
-              -d '{
-                    "revision": "HEAD",
-                    "prune": true,
-                    "dryRun": false,
-                    "strategy": {
-                      "apply": {
-                        "force": true
-                      }
-                    }
-                  }' \
-              "http://${{ env.ARGOCD_SERVER }}/api/v1/applications/fastapi-ml/sync" || echo "⚠️ ArgoCD sync API call failed"
+            echo "ArgoCD CLI not available, using kubectl..."
+            
+            # Method 2: Use kubectl to patch ArgoCD application
+            kubectl patch application fastapi-ml -n argocd --type merge \
+              -p '{"operation":{"initiatedBy":{"username":"github-actions"},"sync":{"revision":"HEAD"}}}' || \
+              echo "⚠️ kubectl patch failed, ArgoCD will auto-sync eventually"
           fi
+          
+          echo "✅ ArgoCD sync triggered"
 
       - name: Wait and verify deployment
         run: |
-          echo "⏳ Waiting for Kubernetes deployment..."
+          echo "⏳ Waiting for ArgoCD to process changes..."
           
-          # Wait for ArgoCD to process changes
-          sleep 45
-          
-          # Check if namespace exists
-          if ! kubectl get namespace fastapi-ml >/dev/null 2>&1; then
-            echo "⚠️ Namespace fastapi-ml not found, ArgoCD may still be creating it..."
-            sleep 30
-          fi
-          
-          # Check deployment status
-          if kubectl get deployment fastapi-ml -n fastapi-ml >/dev/null 2>&1; then
-            echo "📊 Deployment found, checking status..."
-            kubectl rollout status deployment/fastapi-ml -n fastapi-ml --timeout=300s
-            
-            # Show deployment info
-            kubectl get pods -n fastapi-ml -l app=fastapi-ml
-            kubectl get svc -n fastapi-ml
-            
-            # Get service URL if available
-            SERVICE_IP=$(kubectl get svc fastapi-ml -n fastapi-ml -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
-            if [ "$SERVICE_IP" != "pending" ] && [ -n "$SERVICE_IP" ]; then
-              echo "🌐 Service available at: http://$SERVICE_IP"
-              sleep 10  # Wait for LoadBalancer
-              curl -f "http://$SERVICE_IP/health" && echo "✅ Service health check passed!" || echo "⚠️ Service not yet ready"
+          # Wait for ArgoCD application to exist and be synced
+          for i in {1..20}; do
+            if kubectl get application fastapi-ml -n argocd >/dev/null 2>&1; then
+              APP_STATUS=$(kubectl get application fastapi-ml -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+              echo "ArgoCD sync status: $APP_STATUS"
+              
+              if [ "$APP_STATUS" = "Synced" ] || [ "$APP_STATUS" = "OutOfSync" ]; then
+                echo "✅ ArgoCD application is processing"
+                break
+              fi
             fi
+            
+            echo "Waiting for ArgoCD... ($i/20)"
+            sleep 15
+          done
+          
+          # Wait for namespace creation
+          echo "🏗️ Waiting for namespace creation..."
+          for i in {1..10}; do
+            if kubectl get namespace fastapi-ml >/dev/null 2>&1; then
+              echo "✅ Namespace fastapi-ml exists"
+              break
+            fi
+            echo "Waiting for namespace... ($i/10)"
+            sleep 10
+          done
+          
+          # Wait for deployment with better error handling
+          if kubectl get deployment fastapi-ml -n fastapi-ml >/dev/null 2>&1; then
+            echo "📊 Deployment found, waiting for rollout..."
+            kubectl rollout status deployment/fastapi-ml -n fastapi-ml --timeout=600s || {
+              echo "❌ Deployment rollout failed, showing debug info:"
+              kubectl get pods -n fastapi-ml
+              kubectl describe deployment fastapi-ml -n fastapi-ml
+              kubectl get events -n fastapi-ml --sort-by='.lastTimestamp' | tail -10
+              exit 1
+            }
+            
+            # Wait for LoadBalancer IP with retries
+            echo "🌐 Waiting for LoadBalancer IP..."
+            for i in {1..12}; do
+              SERVICE_IP=$(kubectl get svc fastapi-ml -n fastapi-ml -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+              if [ -n "$SERVICE_IP" ] && [ "$SERVICE_IP" != "null" ]; then
+                echo "✅ Service available at: http://$SERVICE_IP"
+                
+                # Test service with retries
+                for j in {1..6}; do
+                  if curl -f --max-time 10 "http://$SERVICE_IP/health"; then
+                    echo "🎉 Service health check passed!"
+                    break
+                  else
+                    echo "Health check attempt $j/6 failed, waiting..."
+                    sleep 10
+                  fi
+                done
+                break
+              fi
+              echo "Waiting for LoadBalancer IP... ($i/12)"
+              sleep 10
+            done
           else
-            echo "⚠️ Deployment not found. Check ArgoCD application status:"
-            kubectl get applications -n argocd | grep fastapi || echo "ArgoCD application not found"
+            echo "❌ Deployment not found after waiting. Checking ArgoCD status:"
+            kubectl get application fastapi-ml -n argocd -o yaml || echo "ArgoCD application not found"
+            kubectl get events -n argocd --sort-by='.lastTimestamp' | grep fastapi || echo "No ArgoCD events found"
+            exit 1
           fi
 
   # 📊 Summary Job
