@@ -292,6 +292,25 @@ jobs:
             echo "✅ Deployment repository updated"
           fi
 
+
+      - name: Install ArgoCD CLI if missing
+        run: |
+         if command -v argocd >/dev/null 2>&1; then
+           echo "✅ ArgoCD CLI already installed at $(command -v argocd)"
+           argocd version --client
+         else
+           echo "📥 Installing ArgoCD CLI..."
+           ARGOCD_VERSION=$(curl -s https://api.github.com/repos/argoproj/argo-cd/releases/latest | grep tag_name | cut -d '"' -f 4)
+           curl -sSL -o argocd "https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-amd64"
+           chmod +x argocd
+           mkdir -p $HOME/bin
+           mv argocd $HOME/bin/
+           echo "$HOME/bin" >> $GITHUB_PATH
+           argocd login ${{ env.ARGOCD_SERVER }} --username admin --password ${{ secrets.ARGOCD_PASSWORD }} --insecure
+           echo "✅ ArgoCD CLI installed at $HOME/bin/argocd"
+           argocd version --client
+         fi 
+
       - name: Ensure kubectl is installed
         run: |
           if command -v kubectl >/dev/null 2>&1; then
