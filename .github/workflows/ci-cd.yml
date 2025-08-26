@@ -125,158 +125,39 @@ jobs:
           
       - name: Test Docker image
         run: |
-          # Ensure old container is removed if it exists
           docker rm -f test-fastapi || true
-          echo "🧪 Testing Docker image..."
+          echo "Testing Docker image..."
           
-          # Run container in background
+          # Run container
           docker run -d --name test-fastapi -p 8080:8080 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           
-          # Wait for container to be fully running
-          echo "⏳ Waiting 30 sec for container startup..."
+          # Wait for startup
           sleep 30
           
-          # Check container status
+          # Verify container is running
           if ! docker ps | grep -q test-fastapi; then
-            echo "❌ Container is not running"
-            echo "=== Container Status ==="
+            echo "Container failed to start"
             docker ps -a | grep test-fastapi
-            echo "=== Container Logs ==="
-            docker logs test-fastapi
-            docker rm test-fastapi
-            exit 1
-          fi
-          
-          # Wait for application to be ready with better logging
-          echo "⏳ Waiting for FastAPI application to be ready..."
-          for i in {1..60}; do
-            # Check if Uvicorn is running
-            if docker logs test-fastapi 2>&1 | grep -q "Uvicorn running on\|Application startup complete"; then
-              echo "✅ FastAPI application started"
-              break
-            fi
-            
-            # Show current logs every 10 seconds
-            if [ $((i % 10)) -eq 0 ]; then
-              echo "=== Current Container Logs (attempt $i/60) ==="
-              docker logs test-fastapi 2>&1 | tail -10
-            fi
-            
-            if [ $i -eq 60 ]; then
-              echo "❌ FastAPI application failed to start within 2 minutes"
-              echo "=== Full Container Logs ==="
-              docker logs test-fastapi
-              docker stop test-fastapi && docker rm test-fastapi
-              exit 1
-            fi
-            sleep 2
-          done
-          
-          # Additional wait for the service to be fully ready
-          echo "⏳ Allowing additional time for service initialization..."
-          sleep 10
-          
-          # Check if port is actually listening
-          echo "🔍 Checking if port 8080 is listening..."
-          echo "🔍 Checking container port mapping..."
-          docker port test-fastapi || echo "No port mappings found"
-          echo "🔍 Checking if container process is listening..."
-          docker exec test-fastapi netstat -tlnp 2>/dev/null | grep :8080 || echo "Port check inside container failed"
-          netstat -tlnp | grep :8080 || echo "Port 8080 not found in netstat"
-          ss -tlnp | grep :8080 || echo "Port 8080 not found in ss"
-          echo "🔍 Checking if port 8080 is listening..."
-          # Convert 8080 to hex: 8080 = 0x1F90
-          grep -q ":1F90" /proc/net/tcp && echo "✅ Port 8080 found in /proc/net/tcp" || echo "❌ Port 8080 not found"
-          
-          # Debug container networking
-          echo "🔧 Container network debugging:"
-          CONTAINER_IP=$(docker inspect test-fastapi --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
-          echo "Container IP: $CONTAINER_IP"
-          echo "Port mappings:"
-          docker port test-fastapi
-          echo "Container status:"
-          docker ps | grep test-fastapi
-
-          # Debug runner networking
-          echo "🔧 Runner networking debug:"
-          echo "Checking what's listening on port 8080:"
-          sudo lsof -i :8080 || echo "lsof not available"
-          echo "Checking localhost connectivity:"
-          ping -c 1 localhost || echo "localhost ping failed"
-          echo "Checking if runner can reach container directly:"
-          CONTAINER_IP=$(docker inspect test-fastapi --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
-          ping -c 1 $CONTAINER_IP || echo "Container ping failed"
-
-          # Test health endpoint with better debugging
-          echo "🏥 Testing health endpoint..."
-          for i in {1..15}; do
-            echo "Health check attempt $i/15..."
-            
-            # First check if container is still running
-            if ! docker ps | grep -q test-fastapi; then
-              echo "❌ Container stopped running!"
-              echo "=== Container Status ==="
-              docker ps -a | grep test-fastapi
-              echo "=== Container Logs ==="
-              docker logs test-fastapi
-              exit 1
-            fi
-            
-            # Try curl with different approaches
-            if [ $i -eq 1 ] || [ $i -eq 15 ]; then
-              # Verbose output for first and last attempts
-              echo "Trying localhost:8080..."
-              curl -v --max-time 15 "http://localhost:8080/health" 
-              
-              # Try container IP if available
-              if [ -n "$CONTAINER_IP" ]; then
-                echo "Trying container IP ${CONTAINER_IP}:8080..."
-                curl -v --max-time 15 "http://$CONTAINER_IP:8080/health" 
-              fi
-            else
-              curl -f --max-time 10 "http://localhost:8080/health"
-            fi
-            
-            if [ $? -eq 0 ]; then
-              echo "✅ Health check passed on attempt $i"
-              break
-            fi
-            
-            if [ $i -eq 15 ]; then
-              echo "❌ Health check failed after 15 attempts"
-              echo "=== Final Debug Information ==="
-              echo "Container status:"
-              docker ps | grep test-fastapi
-              echo "Container logs (last 50 lines):"
-              docker logs --tail 50 test-fastapi
-              echo "Container inspect (networking):"
-              docker inspect test-fastapi --format='{{json .NetworkSettings}}' | jq . 2>/dev/null || echo "jq not available"
-              echo "Port mappings:"
-              docker port test-fastapi
-              
-              docker stop test-fastapi && docker rm test-fastapi
-              exit 1
-            fi
-            
-            echo "Retrying in 4 seconds..."
-            sleep 4
-          done 
-          
-          # Test a few more endpoints if health passed
-          echo "🧪 Testing additional endpoints..."
-          curl -f --max-time 10 "http://localhost:8080/health" || echo "Health endpoint failed" 
-          curl -f --max-time 10 "http://localhost:8080/" || echo "Root endpoint failed"
-          curl -f --max-time 10 "http://localhost:8080/ping" || echo "Ping endpoint failed"
-          echo "🔍 Verifying container is still running..."
-          if ! docker ps | grep -q test-fastapi; then
-            echo "❌ Container crashed after startup!"
-            echo "=== Container Status ==="
-            docker ps -a | grep test-fastapi
-            echo "=== Container Logs ==="
             docker logs test-fastapi
             exit 1
           fi
           
+          # Test inside container (avoids runner networking issues)
+          echo "Testing health endpoint inside container..."
+          if docker exec test-fastapi curl -f --max-time 10 http://localhost:8080/health; then
+            echo "Health check passed"
+          else
+            echo "Health check failed"
+            docker logs test-fastapi
+            docker stop test-fastapi && docker rm test-fastapi
+            exit 1
+          fi
+          
+          # Test additional endpoints
+          docker exec test-fastapi curl -f http://localhost:8080/ || exit 1
+          docker exec test-fastapi curl -f http://localhost:8080/ping || exit 1
+          
+          docker stop test-fastapi && docker rm test-fastapi
           # Cleanup
           echo "🧹 Cleaning up test container..."
           docker stop test-fastapi && docker rm test-fastapi
