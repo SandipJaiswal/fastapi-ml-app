@@ -211,22 +211,52 @@ jobs:
           
           # Check if port is actually listening
           echo "🔍 Checking if port 8080 is listening..."
+          echo "🔍 Checking container port mapping..."
+          docker port test-fastapi || echo "No port mappings found"
+          echo "🔍 Checking if container process is listening..."
+          docker exec test-fastapi netstat -tlnp 2>/dev/null | grep :8080 || echo "Port check inside container failed"
           netstat -tlnp | grep :8080 || echo "Port 8080 not found in netstat"
           ss -tlnp | grep :8080 || echo "Port 8080 not found in ss"
           echo "🔍 Checking if port 8080 is listening..."
           # Convert 8080 to hex: 8080 = 0x1F90
           grep -q ":1F90" /proc/net/tcp && echo "✅ Port 8080 found in /proc/net/tcp" || echo "❌ Port 8080 not found"
           
-          # Test health endpoint with detailed debugging
+          # Debug container networking
+          echo "🔧 Container network debugging:"
+          CONTAINER_IP=$(docker inspect test-fastapi --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+          echo "Container IP: $CONTAINER_IP"
+          echo "Port mappings:"
+          docker port test-fastapi
+          echo "Container status:"
+          docker ps | grep test-fastapi
+          # Test health endpoint with better debugging
           echo "🏥 Testing health endpoint..."
           for i in {1..15}; do
             echo "Health check attempt $i/15..."
             
-            # Try curl with verbose output on first and last attempts
+            # First check if container is still running
+            if ! docker ps | grep -q test-fastapi; then
+              echo "❌ Container stopped running!"
+              echo "=== Container Status ==="
+              docker ps -a | grep test-fastapi
+              echo "=== Container Logs ==="
+              docker logs test-fastapi
+              exit 1
+            fi
+            
+            # Try curl with different approaches
             if [ $i -eq 1 ] || [ $i -eq 15 ]; then
-              curl -v --max-time 15 "http://localhost:8080/health"
+              # Verbose output for first and last attempts
+              echo "Trying localhost:8080..."
+              curl -v --max-time 15 "http://localhost:8080/health" 2>&1 || echo "localhost failed"
+              
+              # Try container IP if available
+              if [ -n "$CONTAINER_IP" ]; then
+                echo "Trying container IP ${CONTAINER_IP}:8080..."
+                curl -v --max-time 15 "http://$CONTAINER_IP:8080/health" 2>&1 || echo "Container IP failed"
+              fi
             else
-              curl -f --max-time 10 "http://localhost:8080/health"
+              curl -f --max-time 10 "http://localhost:8080/health" >/dev/null 2>&1
             fi
             
             if [ $? -eq 0 ]; then
@@ -236,22 +266,15 @@ jobs:
             
             if [ $i -eq 15 ]; then
               echo "❌ Health check failed after 15 attempts"
-              echo "=== Debug Information ==="
+              echo "=== Final Debug Information ==="
               echo "Container status:"
               docker ps | grep test-fastapi
-              echo "Container logs:"
-              docker logs test-fastapi
-              echo "Container processes:"
-              docker exec test-fastapi ps aux 2>/dev/null || echo "Could not list processes"
-              echo "Container network:"
-              docker exec test-fastapi netstat -tlnp 2>/dev/null || echo "Could not list ports"
-              
-              # Try direct container connection
-              CONTAINER_IP=$(docker inspect test-fastapi --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
-              if [ -n "$CONTAINER_IP" ]; then
-                echo "Trying direct container IP: $CONTAINER_IP"
-                curl -v --max-time 10 "http://$CONTAINER_IP:8080/health" 2>&1 || echo "Direct connection failed"
-              fi
+              echo "Container logs (last 50 lines):"
+              docker logs --tail 50 test-fastapi
+              echo "Container inspect (networking):"
+              docker inspect test-fastapi --format='{{json .NetworkSettings}}' | jq . 2>/dev/null || echo "jq not available"
+              echo "Port mappings:"
+              docker port test-fastapi
               
               docker stop test-fastapi && docker rm test-fastapi
               exit 1
@@ -259,7 +282,7 @@ jobs:
             
             echo "Retrying in 4 seconds..."
             sleep 4
-          done
+          done 
           
           # Test a few more endpoints if health passed
           echo "🧪 Testing additional endpoints..."
