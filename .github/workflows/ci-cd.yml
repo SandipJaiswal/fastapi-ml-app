@@ -167,8 +167,8 @@ jobs:
             ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           
           # Wait for container to be fully running
-          echo "⏳ Waiting for container startup..."
-          sleep 5
+          echo "⏳ Waiting 30 sec for container startup..."
+          sleep 30
           
           # Check container status
           if ! docker ps | grep -q test-fastapi; then
@@ -212,8 +212,11 @@ jobs:
           
           # Check if port is actually listening
           echo "🔍 Checking if port 8080 is listening..."
-          netstat -tlnp | grep :8080 || echo "Port 8001 not found in netstat"
+          netstat -tlnp | grep :8080 || echo "Port 8080 not found in netstat"
           ss -tlnp | grep :8080 || echo "Port 8080 not found in ss"
+          echo "🔍 Checking if port 8080 is listening..."
+          # Convert 8080 to hex: 8080 = 0x1F90
+          grep -q ":1F90" /proc/net/tcp && echo "✅ Port 8080 found in /proc/net/tcp" || echo "❌ Port 8080 not found"
           
           # Test health endpoint with detailed debugging
           echo "🏥 Testing health endpoint..."
@@ -222,13 +225,17 @@ jobs:
             
             # Try curl with verbose output on first and last attempts
             if [ $i -eq 1 ] || [ $i -eq 15 ]; then
+              curl -v --max-time 10 "http://localhost:8080/" || echo "Root endpoint failed"
+              curl -v --max-time 10 "http://localhost:8080/ping" || echo "Ping endpoint failed"
               curl -v --max-time 15 "http://localhost:8080/health" 2>&1 || true
             else
+              curl -f --max-time 10 "http://localhost:8080/" || echo "Root endpoint failed"
+              curl -f --max-time 10 "http://localhost:8080/ping" || echo "Ping endpoint failed"
               curl -f --max-time 10 "http://localhost:8080/health" 2>/dev/null
             fi
             
             if [ $? -eq 0 ]; then
-              echo "✅ Health check passed"
+              echo "✅ Health check passed on attempt $i"
               break
             fi
             
