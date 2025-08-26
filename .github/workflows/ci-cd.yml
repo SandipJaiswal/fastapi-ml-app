@@ -155,7 +155,7 @@ jobs:
           
           echo "📋 Built images:"
           docker images | grep ${{ env.IMAGE_NAME }}
-
+          
       - name: Test Docker image
         run: |
           # Ensure old container is removed if it exists
@@ -163,8 +163,7 @@ jobs:
           echo "🧪 Testing Docker image..."
           
           # Run container in background
-          docker run -d --name test-fastapi -p 8080:8080 \
-            ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          docker run -d --name test-fastapi -p 8080:8080 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           
           # Wait for container to be fully running
           echo "⏳ Waiting 30 sec for container startup..."
@@ -275,7 +274,7 @@ jobs:
             echo "=== Container Logs ==="
             docker logs test-fastapi
             exit 1
-         fi
+          fi
           
           # Cleanup
           echo "🧹 Cleaning up test container..."
