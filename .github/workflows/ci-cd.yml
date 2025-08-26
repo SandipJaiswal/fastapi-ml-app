@@ -224,9 +224,9 @@ jobs:
             
             # Try curl with verbose output on first and last attempts
             if [ $i -eq 1 ] || [ $i -eq 15 ]; then
-              curl -v --max-time 15 "http://localhost:8080/health" 2>&1 || true
+              curl -v --max-time 15 "http://localhost:8080/health"
             else
-              curl -f --max-time 10 "http://localhost:8080/health" 2>/dev/null
+              curl -f --max-time 10 "http://localhost:8080/health"
             fi
             
             if [ $? -eq 0 ]; then
