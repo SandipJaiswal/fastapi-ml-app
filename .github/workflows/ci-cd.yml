@@ -225,12 +225,8 @@ jobs:
             
             # Try curl with verbose output on first and last attempts
             if [ $i -eq 1 ] || [ $i -eq 15 ]; then
-              curl -v --max-time 10 "http://localhost:8080/" || echo "Root endpoint failed"
-              curl -v --max-time 10 "http://localhost:8080/ping" || echo "Ping endpoint failed"
               curl -v --max-time 15 "http://localhost:8080/health" 2>&1 || true
             else
-              curl -f --max-time 10 "http://localhost:8080/" || echo "Root endpoint failed"
-              curl -f --max-time 10 "http://localhost:8080/ping" || echo "Ping endpoint failed"
               curl -f --max-time 10 "http://localhost:8080/health" 2>/dev/null
             fi
             
@@ -268,8 +264,18 @@ jobs:
           
           # Test a few more endpoints if health passed
           echo "🧪 Testing additional endpoints..."
+          curl -f --max-time 10 "http://localhost:8080/health" || echo "Health endpoint failed" 
           curl -f --max-time 10 "http://localhost:8080/" || echo "Root endpoint failed"
           curl -f --max-time 10 "http://localhost:8080/ping" || echo "Ping endpoint failed"
+          echo "🔍 Verifying container is still running..."
+          if ! docker ps | grep -q test-fastapi; then
+            echo "❌ Container crashed after startup!"
+            echo "=== Container Status ==="
+            docker ps -a | grep test-fastapi
+            echo "=== Container Logs ==="
+            docker logs test-fastapi
+            exit 1
+         fi
           
           # Cleanup
           echo "🧹 Cleaning up test container..."
