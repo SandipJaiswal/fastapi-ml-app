@@ -139,13 +139,13 @@ jobs:
 
           # Health check
           HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-              CMD curl -f http://localhost:8000/health || exit 1
+              CMD curl -f http://localhost:8080/health || exit 1
 
           # Expose port
-          EXPOSE 8000
+          EXPOSE 8080
 
           # Run the application
-          CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
           EOF
           fi
           
@@ -163,7 +163,7 @@ jobs:
           echo "🧪 Testing Docker image..."
           
           # Run container in background
-          docker run -d --name test-fastapi -p 8001:8000 \
+          docker run -d --name test-fastapi -p 8080:8080 \
             ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           
           # Wait for container to be fully running
@@ -211,9 +211,9 @@ jobs:
           sleep 10
           
           # Check if port is actually listening
-          echo "🔍 Checking if port 8001 is listening..."
-          netstat -tlnp | grep :8001 || echo "Port 8001 not found in netstat"
-          ss -tlnp | grep :8001 || echo "Port 8001 not found in ss"
+          echo "🔍 Checking if port 8080 is listening..."
+          netstat -tlnp | grep :8080 || echo "Port 8001 not found in netstat"
+          ss -tlnp | grep :8080 || echo "Port 8080 not found in ss"
           
           # Test health endpoint with detailed debugging
           echo "🏥 Testing health endpoint..."
@@ -222,9 +222,9 @@ jobs:
             
             # Try curl with verbose output on first and last attempts
             if [ $i -eq 1 ] || [ $i -eq 15 ]; then
-              curl -v --max-time 15 "http://localhost:8001/health" 2>&1 || true
+              curl -v --max-time 15 "http://localhost:8080/health" 2>&1 || true
             else
-              curl -f --max-time 10 "http://localhost:8001/health" 2>/dev/null
+              curl -f --max-time 10 "http://localhost:8080/health" 2>/dev/null
             fi
             
             if [ $? -eq 0 ]; then
@@ -248,7 +248,7 @@ jobs:
               CONTAINER_IP=$(docker inspect test-fastapi --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
               if [ -n "$CONTAINER_IP" ]; then
                 echo "Trying direct container IP: $CONTAINER_IP"
-                curl -v --max-time 10 "http://$CONTAINER_IP:8000/health" 2>&1 || echo "Direct connection failed"
+                curl -v --max-time 10 "http://$CONTAINER_IP:8080/health" 2>&1 || echo "Direct connection failed"
               fi
               
               docker stop test-fastapi && docker rm test-fastapi
@@ -261,8 +261,8 @@ jobs:
           
           # Test a few more endpoints if health passed
           echo "🧪 Testing additional endpoints..."
-          curl -f --max-time 10 "http://localhost:8001/" || echo "Root endpoint failed"
-          curl -f --max-time 10 "http://localhost:8001/ping" || echo "Ping endpoint failed"
+          curl -f --max-time 10 "http://localhost:8080/" || echo "Root endpoint failed"
+          curl -f --max-time 10 "http://localhost:8080/ping" || echo "Ping endpoint failed"
           
           # Cleanup
           echo "🧹 Cleaning up test container..."
@@ -461,20 +461,20 @@ jobs:
             if [ -n "$SERVICE_IP" ] && [ "$SERVICE_IP" != "null" ] && [ "$SERVICE_IP" != "<pending>" ]; then
               echo "✅ Service available at: $SERVICE_IP"
               
-              # Test the service on port 80 (external port)
-              echo "🧪 Testing service health check on port 80..."
+              # Test the service on port 8080 (external port)
+              echo "🧪 Testing service health check on port 8080..."
               for j in {1..10}; do
-                if curl -f --max-time 15 "http://$SERVICE_IP:80/health"; then
-                  echo "🎉 Service health check passed on port 80!"
+                if curl -f --max-time 15 "http://$SERVICE_IP:8080/health"; then
+                  echo "🎉 Service health check passed on port 8080!"
                   break
                 elif [ $j -eq 10 ]; then
-                  echo "❌ Health check failed on port 80"
+                  echo "❌ Health check failed on port 8080"
                   # Try direct pod access for debugging
                   echo "🔍 Debugging - trying direct pod access..."
                   POD_NAME=$(kubectl get pods -n fastapi-ml -l app=fastapi-ml -o jsonpath='{.items[0].metadata.name}')
                   if [ -n "$POD_NAME" ]; then
-                    echo "Testing direct pod access on port 8000..."
-                    kubectl port-forward pod/$POD_NAME 8080:8000 -n fastapi-ml &
+                    echo "Testing direct pod access on port 8080..."
+                    kubectl port-forward pod/$POD_NAME 8080:8080 -n fastapi-ml &
                     PF_PID=$!
                     sleep 5
                     curl -f --max-time 10 "http://localhost:8080/health" || echo "Direct pod access failed"
